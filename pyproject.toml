@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ltspice-runner"
+version = "0.1.0"
+description = "LTspice simulation runner"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.0",
+    "deprecated",
+    "ltspice",
+    "matplotlib>=3.5",
+    "numpy",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.uv.sources]
+ltspice = { path = "./ltspice_pytool" }
+
+[project.scripts]
+ltspice-runner = "ltspice_runner.cli:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ltspice_runner"]
+
