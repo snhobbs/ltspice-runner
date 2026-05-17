@@ -12,7 +12,7 @@ dependencies = [
     "click>=8.0",
     "deprecated",
     "ltspice",
-    "ltspice2svg",
+    "ltspice_to_svg",
     "matplotlib>=3.5",
     "numpy",
 ]
@@ -21,8 +21,8 @@ dependencies = [
 allow-direct-references = true
 
 [tool.uv.sources]
-ltspice = { path = "./ltspice_pytool" }
-ltspice2svg = { path = "./ltspice2svg" }
+ltspice = { path = "./ltspice_pytool", editable = true }
+ltspice_to_svg = { path = "../ltspice_to_svg" }
 
 [project.scripts]
 ltspice-runner = "ltspice_runner.cli:cli"

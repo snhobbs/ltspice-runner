@@ -1,0 +1,3 @@
+[submodule "libs/ltspice_pytool"]
+	path = libs/ltspice_pytool
+	url = https://github.com/DongHoonPark/ltspice_pytool
