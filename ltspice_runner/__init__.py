@@ -1,5 +1,5 @@
 from .netlist import Netlist
-from .simulation import AC, DC, Noise, OperatingPoint, Simulation, Transient
+from .simulation import AC, DC, Noise, OperatingPoint, Simulation, SimulationCase, Transient
 from .sources import ACSource, Constant, CurrentSource, Exp, Pulse, PWL, Sin, VoltageSource, Waveform
 from .runner import export_netlist, run_ltspice, run_simulations
 from .plotter import plot_raw
@@ -21,6 +21,7 @@ __all__ = [
     "PWL",
     "VoltageSource",
     "CurrentSource",
+    "SimulationCase",
     "run_ltspice",
     "run_simulations",
     "plot_raw",

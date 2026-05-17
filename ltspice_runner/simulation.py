@@ -1,5 +1,10 @@
-from dataclasses import dataclass
-from typing import Optional
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from .sources import VoltageSource, CurrentSource
 
 
 class Simulation:
@@ -93,3 +98,16 @@ class DC(Simulation):
 
     def to_net(self) -> str:
         return f".dc {self.source} {self.start} {self.stop} {self.step}"
+
+
+@dataclass
+class SimulationCase:
+    """A stimulus source paired with the analysis to run against it."""
+    source: VoltageSource | CurrentSource
+    simulation: Simulation
+    label: str = field(default="")
+    plot_vars: list[str] | None = field(default=None)
+
+    def __post_init__(self):
+        if not self.label:
+            self.label = self.simulation.name

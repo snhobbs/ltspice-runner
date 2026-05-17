@@ -13,7 +13,6 @@ Usage:
     uv run python example/run_tests.py MyCircuit.net --lib-dir ../lib
 """
 
-import argparse
 import os
 import sys
 from pathlib import Path
@@ -29,32 +28,38 @@ from ltspice_runner import (
     Noise,
     OperatingPoint,
     Pulse,
+    SimulationCase,
     Transient,
     VoltageSource,
     export_netlist,
     plot_raw,
-    run_ltspice,
+    run_simulations,
 )
 from ltspice_runner.runner import DEFAULT_LTSPICE
+
+import click
 
 EXAMPLE_DIR = Path(__file__).parent
 
 
-def opamp_suite():
+def opamp_suite(input_node="IN", output_node="OUT") -> list[SimulationCase]:
     """Five standard analyses for a voltage-input / voltage-output circuit."""
     return [
-        (
-            "operating_point",
-            VoltageSource("VIN", "IN", "0", Constant("0")),
+        SimulationCase(
+            VoltageSource(
+                f"V({input_node})",
+                node_plus=input_node,
+                node_minus="0",
+                waveform=Constant("0"),
+            ),
             OperatingPoint(),
         ),
-        (
-            "step_response",
+        SimulationCase(
             VoltageSource(
-                "VIN",
-                "IN",
-                "0",
-                Pulse(
+                f"V({input_node})",
+                node_plus=input_node,
+                node_minus="0",
+                waveform=Pulse(
                     initial="0",
                     pulsed="1",
                     rise="1n",
@@ -64,113 +69,145 @@ def opamp_suite():
                 ),
             ),
             Transient("2m", step_ceiling="10n"),
+            plot_vars=[f"V({input_node})", f"V({output_node})"],
         ),
-        (
-            "noise",
-            VoltageSource("VIN", "IN", "0", Constant("0")),
+        SimulationCase(
+            VoltageSource(
+                f"V({input_node})",
+                node_plus=input_node,
+                node_minus="0",
+                waveform=Constant("0"),
+            ),
             Noise(
-                output="OUT",
-                source="VIN",
+                output=output_node,
+                source=f"V({input_node})",
                 points=100,
                 start_freq="1",
                 stop_freq="10meg",
             ),
+            label="noise",
+            plot_vars=[f"V({input_node})", f"V({output_node})", "gain"],
         ),
-        (
-            "dc_sweep",
-            VoltageSource("VIN", "IN", "0", Constant("0")),
-            DC(source="VIN", start="-10", stop="10", step="10m"),
+        SimulationCase(
+            VoltageSource(
+                f"V({input_node})",
+                node_plus=input_node,
+                node_minus="0",
+                waveform=Constant("0"),
+            ),
+            DC(source=f"V({input_node})", start="-10", stop="10", step="10m"),
+            plot_vars=[f"V({input_node})", f"V({output_node})"],
         ),
-        (
-            "ac_sweep",
-            VoltageSource("VIN", "IN", "0", ACSource("1")),
+        SimulationCase(
+            VoltageSource(
+                f"V({input_node})",
+                node_plus=input_node,
+                node_minus="0",
+                waveform=ACSource("1"),
+            ),
             AC(points=200, start_freq="1", stop_freq="10meg"),
+            plot_vars=[f"V({input_node})", f"V({output_node})", "gain"],
         ),
     ]
 
 
-def run_circuit(netlist_path, suite, args):
-    print(f"=== {netlist_path.stem} ===")
-
-    base_net = Netlist.from_file(netlist_path)
-    base_net = base_net.remove_simulation_lines()
-    if args.lib_dir:
-        base_net = base_net.replace_libraries(args.lib_dir)
-
-    print(f"  nodes: {', '.join(base_net.nodes())}")
-
-    build_dir = args.build_dir / netlist_path.stem
-    build_dir.mkdir(parents=True, exist_ok=True)
-
-    for label, source, sim in suite:
-        net = base_net.set_source(source).add_simulation(sim)
-        net_path = build_dir / f"{label}.net"
-        net.write(net_path)
-
-        print(f"  [{label}]  {sim.to_net()}")
-
-        raw_path = net_path.with_suffix(".raw")
-
-        if not args.skip_run:
-            try:
-                run_ltspice(net_path, args.ltspice)
-                print(f"    output: {raw_path}")
-            except RuntimeError as e:
-                print(f"    ERROR:  {e}")
-
-        if args.plot and raw_path.exists():
-            plot_raw(
-                raw_path,
-                variables=[f"V({source.node_plus})"] if sim.name != "op" else None,
-                title=f"{netlist_path.stem} — {label.replace('_', ' ')}",
-                db=(label == "ac_sweep"),
-            )
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    parser.add_argument("netlists", nargs="*", type=Path)
-    parser.add_argument("--lib-dir", type=Path, default=None)
-    parser.add_argument("--build-dir", type=Path, default=EXAMPLE_DIR / "build")
-    parser.add_argument("--ltspice", default=os.environ.get("LTSPICE", DEFAULT_LTSPICE))
-    parser.add_argument("--plot", action="store_true")
-    parser.add_argument("--skip-run", action="store_true")
-    args = parser.parse_args()
-
-    sources = args.netlists or (
-        sorted(EXAMPLE_DIR.glob("*.net")) + sorted(EXAMPLE_DIR.glob("*.asc"))
-    )
-    if not sources:
-        print("No .net or .asc files found.")
-        sys.exit(1)
-
+def resolve_sources(netlists, ltspice, skip_run) -> list[Path]:
+    """Resolve and deduplicate netlist paths, exporting .asc files as needed."""
     seen = set()
-    for path in sources:
+    resolved = []
+    for path in netlists:
         if path.suffix == ".asc":
             net = path.with_suffix(".net")
             if net.exists():
                 path = net
-            elif args.skip_run:
-                print(
-                    f"Skipping {path.name} (no .net file, use --skip-run only after exporting)"
-                )
+            elif skip_run:
+                click.echo(f"Skipping {path.name} (no .net file)")
                 continue
             else:
-                print(f"Exporting netlist from {path.name}...")
+                click.echo(f"Exporting netlist from {path.name}...")
                 try:
-                    path = export_netlist(path, args.ltspice)
+                    path = export_netlist(path, ltspice)
                 except RuntimeError as e:
-                    print(f"  ERROR: {e}")
+                    click.echo(f"  ERROR: {e}", err=True)
                     continue
+        if path.stem not in seen:
+            seen.add(path.stem)
+            resolved.append(path)
+    return resolved
 
-        if path.stem in seen:
-            continue
-        seen.add(path.stem)
 
+def run_all(
+    paths, build_dir, lib_dir, ltspice, skip_run
+) -> list[tuple[Path, list[SimulationCase], list[Path]]]:
+    """Run the opamp suite on each netlist. Returns (netlist_path, suite, raw_files) tuples."""
+    results = []
+    for path in paths:
+        click.echo(f"=== {path.stem} ===")
+        base_net = Netlist.from_file(path)
         suite = opamp_suite()
-        run_circuit(path, suite, args)
+        click.echo(f"  nodes: {', '.join(base_net.nodes())}")
+
+        if skip_run:
+            raw_files = [build_dir / path.stem / f"{case.label}.raw" for case in suite]
+        else:
+            try:
+                raw_files = run_simulations(
+                    base_net, suite, build_dir / path.stem, lib_dir, ltspice
+                )
+            except RuntimeError as e:
+                click.echo(f"  ERROR: {e}", err=True)
+                continue
+
+        results.append((path, suite, raw_files))
+    return results
+
+
+def plot_all(results):
+    """Plot results for all simulations across all netlists."""
+    for path, suite, raw_files in results:
+        for case, raw_path in zip(suite, raw_files):
+            if raw_path.exists():
+                plot_raw(
+                    raw_path,
+                    variables=case.plot_vars,
+                    title=f"{path.stem} — {case.label.replace('_', ' ')}",
+                    db=(case.label == "ac_sweep"),
+                )
+
+
+@click.command()
+@click.argument("netlists", nargs=-1, type=click.Path(path_type=Path))
+@click.option("--lib-dir", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--build-dir",
+    type=click.Path(path_type=Path),
+    default=EXAMPLE_DIR / "build",
+    show_default=True,
+)
+@click.option(
+    "--ltspice", default=os.environ.get("LTSPICE", DEFAULT_LTSPICE), show_default=True
+)
+@click.option("--plot", is_flag=True)
+@click.option(
+    "--plot-only", is_flag=True, help="Skip simulation and plot existing outputs."
+)
+@click.option("--skip-run", is_flag=True)
+def main(netlists, lib_dir, build_dir, ltspice, plot, plot_only, skip_run):
+    sources = list(netlists) or sorted(EXAMPLE_DIR.glob("*.net")) + sorted(
+        EXAMPLE_DIR.glob("*.asc")
+    )
+    if not sources:
+        raise click.ClickException("No .net or .asc files found.")
+
+    if plot_only:
+        skip_run = True
+        plot = True
+
+    paths = resolve_sources(sources, ltspice, skip_run)
+    results = run_all(paths, build_dir, lib_dir, ltspice, skip_run)
+
+    if plot:
+        plot_all(results)
 
 
 if __name__ == "__main__":

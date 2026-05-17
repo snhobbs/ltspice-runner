@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from .netlist import Netlist
-from .simulation import Simulation
+from .simulation import Simulation, SimulationCase
 
 DEFAULT_LTSPICE = (
     r"wine /home/simon/.wine/drive_c/Program\ Files/LTC/LTspiceXVII/XVIIx64.exe"
@@ -13,7 +13,7 @@ DEFAULT_LTSPICE = (
 
 def run_simulations(
     netlist: Netlist,
-    simulations: list[Simulation],
+    simulations: list[Simulation | SimulationCase],
     build_dir: Path,
     lib_dir: Optional[Path] = None,
     ltspice_cmd: str = DEFAULT_LTSPICE,
@@ -27,9 +27,14 @@ def run_simulations(
         prepared = prepared.replace_libraries(Path(lib_dir))
 
     raw_files = []
-    for sim in simulations:
-        net_path = build_dir / f"{sim.name}.net"
-        prepared.add_simulation(sim).write(net_path)
+    for item in simulations:
+        if isinstance(item, SimulationCase):
+            net = prepared.set_source(item.source).add_simulation(item.simulation)
+            net_path = build_dir / f"{item.label}.net"
+        else:
+            net = prepared.add_simulation(item)
+            net_path = build_dir / f"{item.name}.net"
+        net.write(net_path)
         raw_files.append(run_ltspice(net_path, ltspice_cmd))
 
     return raw_files
