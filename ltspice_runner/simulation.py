@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from .sources import VoltageSource, CurrentSource
+    from .sources import VoltageSource, CurrentSource, Parameter
 
 
 class Simulation:
@@ -101,12 +101,61 @@ class DC(Simulation):
 
 
 @dataclass
+class ParameterValue(Simulation):
+    """Wrap any simulation with a single fixed .param override."""
+
+    param: str
+    value: str
+    inner: "Simulation"
+
+    @property
+    def name(self) -> str:
+        return f"{self.param}_{self.value}_{self.inner.name}"
+
+    def to_net(self) -> str:
+        return f".param {self.param}={self.value}\n{self.inner.to_net()}"
+
+
+@dataclass
+class ParameterStep(Simulation):
+    """Wrap any simulation with a .step param sweep.
+
+    Three sweep forms:
+      Linear:  start, stop, increment (default when values and sweep are empty)
+      List:    values=["1k", "4.7k", "10k"]
+      Log:     sweep="oct" or "dec", points=<n>, start, stop
+    """
+
+    param: str
+    inner: "Simulation"
+    start: str = ""
+    stop: str = ""
+    increment: str = ""
+    values: list = field(default_factory=list)
+    sweep: str = ""
+    points: int = 0
+
+    @property
+    def name(self) -> str:
+        return f"step_{self.param}_{self.inner.name}"
+
+    def to_net(self) -> str:
+        if self.values:
+            step_line = f".step param {self.param} list {' '.join(self.values)}"
+        elif self.sweep:
+            step_line = f".step param {self.param} {self.sweep} {self.points} {self.start} {self.stop}"
+        else:
+            step_line = f".step param {self.param} {self.start} {self.stop} {self.increment}"
+        return f"{step_line}\n{self.inner.to_net()}"
+
+
+@dataclass
 class SimulationCase:
     """A stimulus source paired with the analysis to run against it."""
-    source: VoltageSource | CurrentSource
+
+    source: VoltageSource | CurrentSource | Parameter
     simulation: Simulation
     label: str = field(default="")
-    plot_vars: list[str] | None = field(default=None)
 
     def __post_init__(self):
         if not self.label:

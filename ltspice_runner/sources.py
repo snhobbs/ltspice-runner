@@ -5,6 +5,10 @@ class Waveform:
     def to_net(self) -> str:
         raise NotImplementedError
 
+    def dc_value(self) -> str:
+        """DC operating-point value of this waveform (used for bias matching)."""
+        raise NotImplementedError
+
 
 @dataclass
 class Pulse(Waveform):
@@ -22,6 +26,9 @@ class Pulse(Waveform):
             f" {self.rise} {self.fall} {self.width} {self.period})"
         )
 
+    def dc_value(self) -> str:
+        return self.initial
+
 
 @dataclass
 class Sin(Waveform):
@@ -34,6 +41,9 @@ class Sin(Waveform):
 
     def to_net(self) -> str:
         return f"SIN({self.offset} {self.amplitude} {self.freq} {self.delay} {self.damping} {self.phase})"
+
+    def dc_value(self) -> str:
+        return self.offset
 
 
 @dataclass
@@ -51,6 +61,9 @@ class Exp(Waveform):
             f" {self.rise_delay} {self.rise_tau} {self.fall_delay} {self.fall_tau})"
         )
 
+    def dc_value(self) -> str:
+        return self.initial
+
 
 @dataclass
 class PWL(Waveform):
@@ -60,15 +73,22 @@ class PWL(Waveform):
         pairs = " ".join(f"{t} {v}" for t, v in self.points)
         return f"PWL({pairs})"
 
+    def dc_value(self) -> str:
+        return self.points[0][1] if self.points else "0"
+
 
 @dataclass
 class ACSource(Waveform):
     """AC specification for frequency-domain analysis. Produces: AC magnitude [phase]"""
+
     magnitude: str = "1"
     phase: str = "0"
 
     def to_net(self) -> str:
         return f"AC {self.magnitude} {self.phase}"
+
+    def dc_value(self) -> str:
+        return "0"
 
 
 @dataclass
@@ -77,6 +97,18 @@ class Constant(Waveform):
 
     def to_net(self) -> str:
         return self.value
+
+    def dc_value(self) -> str:
+        return self.value
+
+
+@dataclass
+class Parameter:
+    name: str
+    value: str
+
+    def to_net(self) -> str:
+        return f".param {self.name} = {self.value}"
 
 
 @dataclass
@@ -87,7 +119,9 @@ class VoltageSource:
     waveform: Waveform
 
     def to_net(self) -> str:
-        return f"{self.name} {self.node_plus} {self.node_minus} {self.waveform.to_net()}"
+        return (
+            f"{self.name} {self.node_plus} {self.node_minus} {self.waveform.to_net()}"
+        )
 
 
 @dataclass
@@ -98,4 +132,6 @@ class CurrentSource:
     waveform: Waveform
 
     def to_net(self) -> str:
-        return f"{self.name} {self.node_plus} {self.node_minus} {self.waveform.to_net()}"
+        return (
+            f"{self.name} {self.node_plus} {self.node_minus} {self.waveform.to_net()}"
+        )

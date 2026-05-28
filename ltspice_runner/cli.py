@@ -1,16 +1,25 @@
+import logging
+import os
 from pathlib import Path
 
 import click
 
 from .netlist import Netlist
 from .plotter import plot_raw
-from .runner import DEFAULT_LTSPICE, run_simulations
+from .runner import DEFAULT_LTSPICE, export_netlist, run_ltspice, run_simulations
 from .simulation import AC, DC, Noise, OperatingPoint, Transient
 
 
 @click.group()
-def cli():
+@click.option("--debug", is_flag=True, default=False, help="Enable debug logging.")
+@click.pass_context
+def cli(ctx, debug):
     """LTspice simulation runner."""
+    logging.basicConfig(
+        level=logging.DEBUG if debug else logging.INFO,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
+    logging.getLogger("matplotlib").setLevel(logging.ERROR)
 
 
 @cli.command()
@@ -57,6 +66,10 @@ def run(netlist, build_dir, lib_dir, ltspice, tran_stop, ac_spec, noise_spec, ru
     if not simulations:
         raise click.UsageError("Specify at least one simulation: --tran, --ac, --noise, --op, or --dc")
 
+    netlist = Path(netlist)
+    if netlist.suffix.lower() == ".asc":
+        netlist = export_netlist(netlist, ltspice_cmd=ltspice, build_dir=build_dir)
+
     net = Netlist.from_file(netlist)
     raw_files = run_simulations(net, simulations, build_dir, lib_dir, ltspice)
     for raw in raw_files:
@@ -82,6 +95,25 @@ def prepare(netlist, lib_dir, output):
 
 @cli.command()
 @click.argument("netlist", type=click.Path(exists=True, path_type=Path))
+@click.option("--ltspice", default=DEFAULT_LTSPICE, show_default=True, help="LTspice executable command")
+def batch(netlist, ltspice):
+    """Run LTspice on a .net file as-is, using its own simulation directives."""
+    raw_path = run_ltspice(Path(netlist), ltspice)
+    click.echo(str(raw_path))
+
+
+@cli.command("export")
+@click.argument("schematic", type=click.Path(exists=True, path_type=Path))
+@click.option("--build-dir", "-b", default="build", type=click.Path(path_type=Path), show_default=True)
+@click.option("--ltspice", default=DEFAULT_LTSPICE, show_default=True, help="LTspice executable command")
+def export_cmd(schematic, build_dir, ltspice):
+    """Export a .asc schematic to a .net netlist in BUILD_DIR."""
+    net_path = export_netlist(Path(schematic), ltspice_cmd=ltspice, build_dir=build_dir)
+    click.echo(str(net_path))
+
+
+@cli.command()
+@click.argument("netlist", type=click.Path(exists=True, path_type=Path))
 def nodes(netlist):
     """Print all node names found in a netlist, one per line."""
     net = Netlist.from_file(netlist)
@@ -98,3 +130,57 @@ def nodes(netlist):
 def plot(raw_file, variable, output, db, title):
     """Plot signals from an LTspice .raw file."""
     plot_raw(raw_file, list(variable) or None, output, title, db)
+
+
+@cli.command()
+@click.argument("schematic", type=click.Path(exists=True, path_type=Path))
+@click.option("--output", "-o", type=click.Path(path_type=Path), help="Output SVG path (default: next to .asc)")
+@click.option("--ltspice-lib", type=click.Path(path_type=Path), help="LTspice symbol library path")
+@click.option("--stroke-width", default=2.0, show_default=True)
+@click.option("--font-size", default=16.0, show_default=True)
+@click.option("--margin", default=10.0, show_default=True)
+@click.option("--font-family", default="Arial", show_default=True)
+@click.option("--no-text", is_flag=True, help="Suppress all text rendering")
+@click.option("--no-comments", is_flag=True, help="Suppress schematic comments")
+@click.option("--no-directives", is_flag=True, help="Suppress SPICE directives")
+@click.option("--no-values", is_flag=True, help="Suppress component values")
+@click.option("--no-names", is_flag=True, help="Suppress component names")
+def svg(schematic, output, ltspice_lib, stroke_width, font_size, margin, font_family,
+        no_text, no_comments, no_directives, no_values, no_names):
+    """Convert a .asc schematic to SVG."""
+    from ltspice_to_svg.ltspice_to_svg import get_ltspice_lib_path
+    from ltspice_to_svg.parsers.schematic_parser import SchematicParser
+    from ltspice_to_svg.renderers.rendering_config import RenderingConfig
+    from ltspice_to_svg.renderers.svg_renderer import SVGRenderer
+
+    if ltspice_lib:
+        os.environ["LTSPICE_LIB_PATH"] = str(ltspice_lib)
+    elif "LTSPICE_LIB_PATH" not in os.environ:
+        os.environ["LTSPICE_LIB_PATH"] = get_ltspice_lib_path()
+
+    schematic = Path(schematic)
+    svg_path = Path(output) if output else schematic.with_suffix(".svg")
+
+    data = SchematicParser(str(schematic)).parse()
+
+    config = RenderingConfig(
+        stroke_width=stroke_width,
+        base_font_size=font_size,
+        viewbox_margin=margin,
+        font_family=font_family,
+        no_schematic_comment=no_text or no_comments,
+        no_spice_directive=no_text or no_directives,
+        no_component_value=no_text or no_values,
+        no_component_name=no_text or no_names,
+    )
+    renderer = SVGRenderer(config)
+    renderer.load_schematic(data["schematic"], data["symbols"])
+    renderer.create_drawing(str(svg_path))
+    renderer.render_wires()
+    renderer.render_symbols()
+    if not no_text:
+        renderer.render_texts()
+    renderer.render_shapes()
+    renderer.render_flags()
+    renderer.save()
+    click.echo(str(svg_path))

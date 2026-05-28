@@ -1,3 +1,5 @@
+import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -31,12 +33,15 @@ SIMULATION_DIRECTIVES = frozenset(
         ".dc",
         ".noise",
         ".op",
+        ".step",
         ".tf",
         ".sens",
         ".four",
         ".fft",
         ".meas",
         ".measure",
+        ".savebias",
+        ".loadbias",
     }
 )
 
@@ -89,20 +94,104 @@ class Netlist:
             new_lines.append(sim.to_net())
         return Netlist(new_lines)
 
+    def _insert_before_end(self, directive: str) -> "Netlist":
+        new_lines = []
+        inserted = False
+        for line in self.lines:
+            stripped = line.strip().lower()
+            if not inserted and stripped in (".backanno", ".end"):
+                new_lines.append(directive)
+                inserted = True
+            new_lines.append(line)
+        if not inserted:
+            new_lines.append(directive)
+        return Netlist(new_lines)
+
+    def add_savebias(self, path: str) -> "Netlist":
+        """Insert .savebias directive (saves OP including internal device states).
+
+        path must be relative to this netlist's own directory (LTspice resolves
+        .savebias/.loadbias paths relative to the netlist file, not the CWD).
+        """
+        return self._insert_before_end(f'.savebias "{path}" internal time=0')
+
+    def add_loadbias(self, path: str) -> "Netlist":
+        """Insert .loadbias directive to pre-load a saved operating point.
+
+        path must be relative to this netlist's own directory.
+        """
+        return self._insert_before_end(f'.loadbias "{path}"')
+
+    def add_save(self, *specs: str) -> "Netlist":
+        """Insert a .save directive before .backanno/.end.
+
+        Multiple specs are joined on one line: add_save("V(*)", "I(I1)")
+        produces '.save V(*) I(I1)'.
+        """
+        return self._insert_before_end(".save " + " ".join(specs))
+
+    def remove_params(self, *names: str) -> "Netlist":
+        """Remove all .param lines for the given parameter names (case-insensitive)."""
+        patterns = [
+            re.compile(rf"(?i)^[ \t]*\.param[ \t]+{re.escape(n)}[ \t]*=")
+            for n in names
+        ]
+        return Netlist([l for l in self.lines if not any(p.match(l) for p in patterns)])
+
     def set_source(self, source) -> "Netlist":
-        """Replace a source component by name, or insert it after the title line."""
+        """Replace a source component by name, or insert it after the title line.
+
+        For Parameter sources: replaces the matching `.param name=...` line in-place,
+        or inserts after the title if none exists.  Pre-existing .step lines are
+        already stripped by remove_simulation_lines() before this is called.
+
+        For VoltageSource / CurrentSource: replaces the component line by name.
+        """
         name_lower = source.name.lower()
         new_lines = []
         replaced = False
-        for line in self.lines:
-            tokens = line.split()
-            if tokens and tokens[0].lower() == name_lower:
-                new_lines.append(source.to_net())
-                replaced = True
-            else:
-                new_lines.append(line)
+
+        if not hasattr(source, "waveform"):
+            # Parameter source — find the existing .param line and replace it.
+            param_pat = re.compile(
+                rf"(?i)^[ \t]*\.param[ \t]+{re.escape(name_lower)}[ \t]*="
+            )
+            for line in self.lines:
+                if param_pat.match(line):
+                    if not replaced:
+                        new_lines.append(source.to_net())
+                        replaced = True
+                    # drop additional duplicate .param lines for this name
+                else:
+                    new_lines.append(line)
+        else:
+            for line in self.lines:
+                tokens = line.split()
+                if tokens and tokens[0].lower() == name_lower:
+                    new_lines.append(source.to_net())
+                    replaced = True
+                else:
+                    new_lines.append(line)
+
         if not replaced:
             new_lines = [self.lines[0], source.to_net()] + self.lines[1:]
+        return Netlist(new_lines)
+
+    def set_param(self, name: str, value: float) -> "Netlist":
+        """Replace a .param value by name. Raises ValueError if not found."""
+        pattern = re.compile(
+            rf'(?i)^([ \t]*\.param[ \t]+{re.escape(name)}[ \t]*=[ \t]*)\S+'
+        )
+        new_lines = []
+        found = False
+        for line in self.lines:
+            if pattern.match(line):
+                new_lines.append(f".param {name}={value:.6g}")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            raise ValueError(f"Parameter '{name}' not found in netlist")
         return Netlist(new_lines)
 
     def nodes(self) -> list[str]:

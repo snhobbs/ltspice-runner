@@ -111,13 +111,13 @@ def opamp_suite(input_node="IN", output_node="OUT") -> list[SimulationCase]:
     ]
 
 
-def resolve_sources(netlists, ltspice, skip_run) -> list[Path]:
+def resolve_sources(netlists, ltspice, skip_run, build_dir: Path = None) -> list[Path]:
     """Resolve and deduplicate netlist paths, exporting .asc files as needed."""
     seen = set()
     resolved = []
     for path in netlists:
         if path.suffix == ".asc":
-            net = path.with_suffix(".net")
+            net = (Path(build_dir) / path.with_suffix(".net").name) if build_dir else path.with_suffix(".net")
             if net.exists():
                 path = net
             elif skip_run:
@@ -126,7 +126,7 @@ def resolve_sources(netlists, ltspice, skip_run) -> list[Path]:
             else:
                 click.echo(f"Exporting netlist from {path.name}...")
                 try:
-                    path = export_netlist(path, ltspice)
+                    path = export_netlist(path, ltspice, build_dir=build_dir)
                 except RuntimeError as e:
                     click.echo(f"  ERROR: {e}", err=True)
                     continue
@@ -203,7 +203,7 @@ def main(netlists, lib_dir, build_dir, ltspice, plot, plot_only, skip_run):
         skip_run = True
         plot = True
 
-    paths = resolve_sources(sources, ltspice, skip_run)
+    paths = resolve_sources(sources, ltspice, skip_run, build_dir=build_dir)
     results = run_all(paths, build_dir, lib_dir, ltspice, skip_run)
 
     if plot:
